@@ -1,0 +1,18 @@
+{
+  "name": "twofold-mcp",
+  "version": "1.1.1",
+  "description": "MCP server for Twofold, the dual-yield liquidity protocol on Robinhood Chain: pools, swaps, staking, with its own sandboxed wallet and ASCII dashboards.",
+  "type": "module",
+  "bin": { "twofold-mcp": "server.mjs" },
+  "files": ["server.mjs", "README.md"],
+  "homepage": "https://twofold.fi/agents.html",
+  "license": "MIT",
+  "author": "Twofold",
+  "keywords": ["mcp", "modelcontextprotocol", "twofold", "robinhood-chain", "defi", "agent", "uniswap-v4", "staking"],
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "viem": "^2.55.0",
+    "zod": "^3.24.0"
+  }
+}

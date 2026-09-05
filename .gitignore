@@ -1,0 +1,4 @@
+node_modules/
+wallet.key
+rpc.txt
+.env
