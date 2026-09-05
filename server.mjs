@@ -14,7 +14,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   createPublicClient, createWalletClient, http, parseAbi, getAddress,
-  encodeAbiParameters, encodePacked, formatUnits, parseUnits,
+  encodeAbiParameters, encodePacked, formatUnits, parseUnits, keccak256,
 } from "viem";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 
@@ -25,7 +25,8 @@ const A = {
   router:  "0x8876789976dEcBfCbBbe364623C63652db8C0904",
   quoter:  "0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94",
   permit2: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
-  hook:    "0x127B3f3b7769f659C5eDBfF8b4005443f19FAAc0",
+  hook:    "0xd1BcbCCa41f3bdb6b4812652959c6dF725ea2Ac0",   // Stack V2 (2026-09-05): every deposit goes here
+  oldHook: "0x127B3f3b7769f659C5eDBfF8b4005443f19FAAc0",   // first stack: withdraw-only for positions opened before 2026-09-05
   weth:    "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
   usdg:    "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
   two:     "0x2A4a33A2163D005d8E7f1D9aC08d14c98db288d5",
@@ -56,12 +57,14 @@ const TOKENS = [
   { sym: "TTWO",  addr: "0x5e81213613b6B86EaB4c6c50d718d34359459786" },
   { sym: "RDDT",  addr: "0x05b37Fb53A299a1b874A619e1c4C404D52C36F4C" },
   { sym: "USDe",  addr: "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34", fee: 100, sp: 1 },
-  { sym: "WETH",  addr: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73" },
+  { sym: "WETH",  addr: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73", fee: 100, sp: 1 },
   { sym: "TWO",   addr: "0x2A4a33A2163D005d8E7f1D9aC08d14c98db288d5", fee: 10000, sp: 200 },
 ];
-const FEE = 3000, SPACING = 60;
+const FEE = 500, SPACING = 10;                 // V2 equity tier; first-stack keys were 3000/60
+const OLD_FEE = 3000, OLD_SPACING = 60;
 
 const HOOK_ABI = parseAbi([
+  "function minDepositBlocks(bytes32) view returns (uint256)",
   "function addLiquidity((address,address,uint24,int24,address),uint256,uint256,uint256,uint256) returns (uint256,uint256)",
   "function removeLiquidity((address,address,uint24,int24,address),uint256,uint256,uint256,uint256) returns (uint256,uint256)",
   "function previewDeposit((address,address,uint24,int24,address),uint256) view returns (uint256,uint256)",
@@ -173,10 +176,20 @@ function token(symOrAddr) {
   if (/^0x[0-9a-fA-F]{40}$/.test(symOrAddr)) return { sym: symOrAddr.slice(0, 8), addr: getAddress(symOrAddr) };
   throw new Error(`unknown token '${symOrAddr}' — use one of: ${TOKENS.map((x) => x.sym).join(", ")} or an address`);
 }
+const POOL_KEY_T = { type: "tuple", components: [{ name: "currency0", type: "address" }, { name: "currency1", type: "address" },
+  { name: "fee", type: "uint24" }, { name: "tickSpacing", type: "int24" }, { name: "hooks", type: "address" }] };
+function poolIdOf(k) { return keccak256(encodeAbiParameters([POOL_KEY_T], [k])); }
 function poolKey(t) {
   const [c0, c1] = [getAddress(t.addr), getAddress(A.usdg)].sort((a, b) =>
     a.toLowerCase() < b.toLowerCase() ? -1 : 1);
   return { currency0: c0, currency1: c1, fee: t.fee ?? FEE, tickSpacing: t.sp ?? SPACING, hooks: A.hook };
+}
+// The same pair on the first stack (its own tiers: equities 3000/60, TWO 10000/200, USDe 100/1).
+function oldPoolKey(t) {
+  const [c0, c1] = [getAddress(t.addr), getAddress(A.usdg)].sort((a, b) =>
+    a.toLowerCase() < b.toLowerCase() ? -1 : 1);
+  const stable = t.sym === "USDe", two = t.sym === "TWO";
+  return { currency0: c0, currency1: c1, fee: stable ? 100 : two ? 10000 : OLD_FEE, tickSpacing: stable ? 1 : two ? 200 : OLD_SPACING, hooks: A.oldHook };
 }
 async function send(req) {
   const nonce = await pub.getTransactionCount({ address: account.address, blockTag: "pending" });
@@ -344,19 +357,19 @@ server.tool("pool_position",
   "The MCP wallet's position in one pool: shares and what burning them returns right now.",
   { pool: z.string().describe("token symbol of the pool, e.g. 'SPY'") },
   async ({ pool }) => {
-    const t = token(pool); const key = poolKey(t);
-    const sh = await pub.readContract({ address: A.hook, abi: HOOK_ABI, functionName: "sharesOf",
-      args: [arr(key), account.address] });
-    if (sh === 0n) return ok(`no position in ${t.sym}/USDG — pool_deposit opens one`);
-    const [a0, a1] = await pub.readContract({ address: A.hook, abi: HOOK_ABI, functionName: "previewWithdraw",
-      args: [arr(key), sh] });
-    const usdgIs0 = key.currency0.toLowerCase() === A.usdg.toLowerCase();
-    const d = await dec(t.addr);
-    return ok(tbl(["", t.sym + "/USDG"], [
-      ["shares", fnum(formatUnits(sh, 18), 6)],
-      ["→ " + t.sym, fnum(formatUnits(usdgIs0 ? a1 : a0, d), 6)],
-      ["→ USDG", fnum(formatUnits(usdgIs0 ? a0 : a1, 6), 2)],
-    ]));
+    const t = token(pool); const d = await dec(t.addr);
+    const rows = [];
+    for (const [label, key] of [["current", poolKey(t)], ["first stack", oldPoolKey(t)]]) {
+      const sh = await pub.readContract({ address: key.hooks, abi: HOOK_ABI, functionName: "sharesOf",
+        args: [arr(key), account.address] }).catch(() => 0n);
+      if (sh === 0n) continue;
+      const [a0, a1] = await pub.readContract({ address: key.hooks, abi: HOOK_ABI, functionName: "previewWithdraw",
+        args: [arr(key), sh] });
+      const usdgIs0 = key.currency0.toLowerCase() === A.usdg.toLowerCase();
+      rows.push([label, fnum(formatUnits(sh, 18), 6), fnum(formatUnits(usdgIs0 ? a1 : a0, d), 6), fnum(formatUnits(usdgIs0 ? a0 : a1, 6), 2)]);
+    }
+    if (!rows.length) return ok(`no position in ${t.sym}/USDG on either stack — pool_deposit opens one on the current hook`);
+    return ok(tbl(["stack", "shares", "→ " + t.sym, "→ USDG"], rows));
   });
 
 server.tool("pool_deposit",
@@ -396,18 +409,30 @@ server.tool("pool_deposit",
 server.tool("pool_withdraw",
   "Burn pool shares from the MCP wallet and take both legs back, slippage-capped.",
   { pool: z.string(), shares: z.string().describe("shares to burn, human units, or 'all'"),
-    slippage_bps: z.number().int().min(1).max(1000).default(50) },
-  async ({ pool, shares, slippage_bps }) => {
-    const t = token(pool); const key = poolKey(t);
-    const have = await pub.readContract({ address: A.hook, abi: HOOK_ABI, functionName: "sharesOf",
+    slippage_bps: z.number().int().min(1).max(1000).default(50),
+    stack: z.enum(["current", "first"]).default("current").describe("'first' burns shares held on the 2026-08 hook (withdraw-only)") },
+  async ({ pool, shares, slippage_bps, stack }) => {
+    const t = token(pool); const key = stack === "first" ? oldPoolKey(t) : poolKey(t);
+    const have = await pub.readContract({ address: key.hooks, abi: HOOK_ABI, functionName: "sharesOf",
       args: [arr(key), account.address] });
     const burn = shares === "all" ? have : parseUnits(shares, 18);
     if (burn === 0n || burn > have) throw new Error(`have ${formatUnits(have, 18)} shares, asked ${shares}`);
-    const [a0, a1] = await pub.readContract({ address: A.hook, abi: HOOK_ABI, functionName: "previewWithdraw",
+    const [a0, a1] = await pub.readContract({ address: key.hooks, abi: HOOK_ABI, functionName: "previewWithdraw",
       args: [arr(key), burn] });
     const cut = (x) => x - (x * BigInt(slippage_bps)) / 10000n;
-    const hash = await send({ address: A.hook, abi: HOOK_ABI, functionName: "removeLiquidity",
-      args: [arr(key), burn, cut(a0), cut(a1), deadline()] });
+    let hash;
+    try {
+      hash = await send({ address: key.hooks, abi: HOOK_ABI, functionName: "removeLiquidity",
+        args: [arr(key), burn, cut(a0), cut(a1), deadline()] });
+    } catch (e) {
+      // DepositLocked(uint256): the hook holds a fresh deposit for minDepositBlocks
+      // (L1 block units, ~12 s each) before it can be withdrawn.
+      if (String(e.message || e).includes("0xa9ac4710")) {
+        const lock = await pub.readContract({ address: key.hooks, abi: HOOK_ABI, functionName: "minDepositBlocks", args: [poolIdOf(key)] }).catch(() => null);
+        throw new Error(`deposit lock: this position was deposited too recently to withdraw (the pool holds a fresh deposit for ${lock ?? "a few"} block(s) of ~12 s). Retry in a minute.`);
+      }
+      throw e;
+    }
     const usdgIs0 = key.currency0.toLowerCase() === A.usdg.toLowerCase();
     return ok(`✓ burned ${formatUnits(burn, 18)} shares of ${t.sym}/USDG → ~${fnum(formatUnits(usdgIs0 ? a1 : a0, await dec(t.addr)), 6)} ${t.sym} + ~${fnum(formatUnits(usdgIs0 ? a0 : a1, 6), 2)} USDG\ntx ${hash}`);
   });
@@ -548,6 +573,8 @@ server.tool("claim_rewards",
     for (let i = 0n; i < n; i++)
       toks.push(await pub.readContract({ address: A.vault, abi: VAULT_ABI, functionName: "rewardTokens", args: [i] }));
     if (!toks.length) return ok("vault has no reward tokens yet");
+    const owed = await Promise.all(toks.map((tk) => pub.readContract({ address: A.vault, abi: VAULT_ABI, functionName: "earned", args: [account.address, tk] })));
+    if (owed.every((x) => x === 0n)) return ok("nothing to claim yet: rewards stream per second from the moment you stake, so check staking_info in a minute");
     const hash = await send({ address: A.vault, abi: VAULT_ABI, functionName: "claimRewards", args: [toks] });
     return ok(`✓ rewards claimed across ${toks.length} token(s)\ntx ${hash}`);
   });

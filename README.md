@@ -40,7 +40,7 @@ TVL, last 30h:  ▁▂▂▂▂▂▂▁▂▁▂▂▂▂▃▄▅▁▃▇▇�
 | `pools_list` | every Twofold pool, reserves drawn as a depth chart |
 | `pool_position` | your shares in a pool and what burning them returns |
 | `pool_deposit` | two-sided deposit, sized on-chain, slippage-capped |
-| `pool_withdraw` | burn shares, take both legs back |
+| `pool_withdraw` | burn shares, take both legs back (`stack: "first"` for a position opened on the 2026-08 pools; new deposits always go to the current pools) |
 | `quote` | price a swap without sending anything; `venue: reference` probes the chain's hookless pools (any pair, e.g. TWO/WETH) |
 | `swap` | swap through a Twofold pool (or a reference pool via `venue`), quoted first, with a real minimum out |
 | `stake` / `start_unstake` / `claim_unstaked` | the TWO staking cycle (1h cooldown) |

@@ -6,7 +6,7 @@ const pub=createPublicClient({chain,transport:http(RPC),pollingInterval:20});
 const rpc=(m,p)=>fetch(RPC,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:m,params:p})}).then(r=>r.json());
 const SV=getAddress("0xf3334192d15450cdd385c8b70e03f9a6bd9e673b");
 const Q=getAddress("0x8dc178efb8111bb0973dd9d722ebeff267c98f94");
-const HOOK=getAddress("0x127b3f3b7769f659c5edbff8b4005443f19faac0");
+const HOOK=getAddress("0xd1BcbCCa41f3bdb6b4812652959c6dF725ea2Ac0");   // Stack V2 hook (2026-09-05); the first-stack hook was 0x127b…aac0
 const ROUTER=getAddress("0x8876789976decbfcbbbe364623c63652db8c0904");
 const PERMIT2=getAddress("0x000000000022d473030f116ddee9f6b43ac78ba3");
 const TWO=getAddress("0x2A4a33A2163D005d8E7f1D9aC08d14c98db288d5");
@@ -19,9 +19,9 @@ const EIS={type:"tuple",components:[{...PK,name:"poolKey"},{name:"zeroForOne",ty
 const id=(k)=>keccak256(encodeAbiParameters([PK],[k]));
 const sort=(a,b)=>a.toLowerCase()<b.toLowerCase()?[a,b]:[b,a];
 const arr=(k)=>[k.currency0,k.currency1,k.fee,k.tickSpacing,k.hooks];
-const [t0,t1]=sort(TWO,USDG); const kTU={currency0:t0,currency1:t1,fee:3000,tickSpacing:60,hooks:HOOK};
+const [t0,t1]=sort(TWO,USDG); const kTU={currency0:t0,currency1:t1,fee:10000,tickSpacing:200,hooks:HOOK};
 const [g0,g1]=sort(TWO,WETH); const kTW={currency0:g0,currency1:g1,fee:10000,tickSpacing:200,hooks:"0x0000000000000000000000000000000000000000"};
-const [w0,w1]=sort(WETH,USDG); const kWU={currency0:w0,currency1:w1,fee:3000,tickSpacing:60,hooks:HOOK};
+const [w0,w1]=sort(WETH,USDG); const kWU={currency0:w0,currency1:w1,fee:100,tickSpacing:1,hooks:HOOK};
 const isTU0=kTU.currency0.toLowerCase()===TWO.toLowerCase();
 const SV_ABI=parseAbi(["function getSlot0(bytes32) view returns (uint160,int24,uint24,uint24)"]);
 const Q_ABI=parseAbi(["function quoteExactInputSingle(((address,address,uint24,int24,address),bool,uint128,bytes)) returns (uint256,uint256)"]);
